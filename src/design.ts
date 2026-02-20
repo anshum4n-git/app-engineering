@@ -13,6 +13,6 @@ export const colors = {
   strokeMuted: "#9CA3AF",
 };
 
-export const SLIDE_DURATION = 120; // 4s @ 30fps
+export const SLIDE_DURATION = 170; // 5s stable + 20 transition @ 30fps
 export const SECTION_DURATION = 75; // 2.5s @ 30fps
 export const TRANSITION_FRAMES = 20;

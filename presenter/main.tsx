@@ -5,7 +5,7 @@ import { Presentation, TOTAL_DURATION } from "../src/Presentation";
 import "../src/index.css";
 
 // Must match src/design.ts
-const SLIDE_DURATION = 120;
+const SLIDE_DURATION = 170; // 5s stable + 20 transition @ 30fps
 const SECTION_DURATION = 75;
 const TRANSITION_FRAMES = 20;
 
@@ -73,7 +73,7 @@ const SLIDE_STARTS: number[] = (() => {
 
 /**
  * The frame where slide i is fully visible (transition-in complete).
- * Slide 0 has no incoming transition so it starts at frame 0.
+ * Slide 0 has no incoming transition so its stable frame is 0.
  */
 function stableFrame(i: number): number {
   return SLIDE_STARTS[i] + (i === 0 ? 0 : TRANSITION_FRAMES);
@@ -82,20 +82,46 @@ function stableFrame(i: number): number {
 function App() {
   const playerRef = useRef<PlayerRef>(null);
   const [slideIndex, setSlideIndex] = useState(0);
-  // Ref so onFrameUpdate callback always sees the current value without stale closure
-  const targetPauseRef = useRef<number | null>(null);
+  // When non-null, the rAF loop will pause playback the moment this frame is reached
+  const targetPauseFrame = useRef<number | null>(null);
   const transitioning = useRef(false);
 
   /**
+   * requestAnimationFrame loop — polls getCurrentFrame() at display rate (~60fps).
+   * This is the only reliable way to pause at an exact frame; setTimeout is too
+   * imprecise and the Player has no supported onFrameUpdate prop.
+   */
+  useEffect(() => {
+    let rafId: number;
+
+    const poll = () => {
+      if (targetPauseFrame.current !== null && playerRef.current) {
+        const frame = playerRef.current.getCurrentFrame();
+        if (frame >= targetPauseFrame.current) {
+          playerRef.current.pause();
+          playerRef.current.seekTo(targetPauseFrame.current);
+          targetPauseFrame.current = null;
+          transitioning.current = false;
+        }
+      }
+      rafId = requestAnimationFrame(poll);
+    };
+
+    rafId = requestAnimationFrame(poll);
+    return () => cancelAnimationFrame(rafId);
+  }, []);
+
+  /**
    * Go forward:
-   *  1. Seek to start(nextSlide) — this is exactly when the transition begins
-   *  2. Play
-   *  3. onFrameUpdate auto-pauses when we reach stableFrame(nextSlide)
+   *  1. Seek to start(nextSlide) — exactly when the outgoing transition begins
+   *  2. play()
+   *  3. rAF loop detects frame >= stableFrame(next) and pauses
    */
   const goNext = useCallback(() => {
     if (slideIndex >= SLIDES.length - 1 || transitioning.current) return;
     const next = slideIndex + 1;
-    targetPauseRef.current = stableFrame(next);
+
+    targetPauseFrame.current = stableFrame(next);
     transitioning.current = true;
     setSlideIndex(next);
     playerRef.current?.seekTo(SLIDE_STARTS[next]);
@@ -103,27 +129,18 @@ function App() {
   }, [slideIndex]);
 
   /**
-   * Go back: jump directly to the previous slide's stable frame.
-   * No transition is played — going backwards would look odd animated forward.
+   * Go back: cancel any in-progress transition and jump instantly to the
+   * previous slide's stable frame. No forward animation going backwards.
    */
   const goPrev = useCallback(() => {
-    if (slideIndex <= 0 || transitioning.current) return;
-    const prev = slideIndex - 1;
-    targetPauseRef.current = null;
+    if (slideIndex <= 0) return;
+    targetPauseFrame.current = null;
     transitioning.current = false;
+    const prev = slideIndex - 1;
     setSlideIndex(prev);
+    playerRef.current?.pause();
     playerRef.current?.seekTo(stableFrame(prev));
   }, [slideIndex]);
-
-  const handleFrameUpdate = useCallback((frame: number) => {
-    if (targetPauseRef.current !== null && frame >= targetPauseRef.current) {
-      const pauseAt = targetPauseRef.current;
-      playerRef.current?.pause();
-      playerRef.current?.seekTo(pauseAt);
-      targetPauseRef.current = null;
-      transitioning.current = false;
-    }
-  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -176,10 +193,8 @@ function App() {
         }}
         initiallyShowControls={false}
         clickToPlay={false}
-        onFrameUpdate={handleFrameUpdate}
       />
 
-      {/* Navigation bar */}
       <div
         style={{
           display: "flex",
